@@ -7,6 +7,10 @@
  * Listens on port 3456, directly invokes Claude CLI.
  */
 
+// Clear Claude Code nesting detection so CLI subprocess can run
+delete process.env.CLAUDECODE;
+delete process.env.CLAUDE_CODE_ENTRYPOINT;
+
 import express from 'express';
 import crypto from 'crypto';
 import { createRequire } from 'module';
