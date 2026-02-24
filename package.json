@@ -1,0 +1,10 @@
+{
+  "name": "claude-max-api-relay",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Content normalization + token stats relay for claude-max-api-proxy",
+  "main": "server.js",
+  "dependencies": {
+    "tiktoken": "^1.0.18"
+  }
+}
