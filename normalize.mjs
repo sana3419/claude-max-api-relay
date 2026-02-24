@@ -3,7 +3,7 @@
  * Converts object array format [{type:"text", text:"..."}] to plain string.
  */
 
-function normalizeContent(content) {
+export function normalizeContent(content) {
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) {
     return content
@@ -14,12 +14,10 @@ function normalizeContent(content) {
   return String(content);
 }
 
-function normalizeMessages(messages) {
+export function normalizeMessages(messages) {
   if (!Array.isArray(messages)) return messages;
   return messages.map(msg => ({
     ...msg,
     content: normalizeContent(msg.content),
   }));
 }
-
-module.exports = { normalizeContent, normalizeMessages };

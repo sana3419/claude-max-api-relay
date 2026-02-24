@@ -1,6 +1,4 @@
 {
-  "listen_port": 3457,
-  "upstream_host": "127.0.0.1",
-  "upstream_port": 3456,
+  "port": 3456,
   "max_requests_per_day": 200
 }

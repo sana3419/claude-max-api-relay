@@ -1,15 +1,13 @@
 # claude-max-api-relay
 
-[claude-max-api-proxy](https://github.com/atalovesyou/claude-max-api-proxy) 的前置中继服务，提供请求内容格式规范化和 Token 用量统计。
+一体化 Claude Max API 服务，将 [claude-max-api-proxy](https://github.com/atalovesyou/claude-max-api-proxy) 作为依赖集成，提供 OpenAI 兼容接口、内容格式规范化和 Token 用量统计。
 
-## 解决的问题
-
-部分客户端发送 OpenAI chat completions 请求时，`messages[].content` 使用对象数组格式（`[{type:"text", text:"..."}]`）而非纯字符串，导致 [claude-max-api-proxy](https://github.com/atalovesyou/claude-max-api-proxy) 收到 `[object Object]`。本服务在转发前自动完成格式转换。
+一个进程、一个端口，直接调用 Claude CLI。
 
 ## 架构
 
 ```
-客户端 → claude-max-api-relay (:3457) → claude-max-api-proxy (:3456)
+客户端 → claude-max-api-relay (:3456) → Claude CLI
                     ↓
               log/stats.json（Token 统计）
 ```
@@ -18,11 +16,11 @@
 
 | 文件 | 说明 |
 |------|------|
-| `server.js` | HTTP 服务主入口 |
-| `config.json` | 配置文件（端口、上游地址等） |
-| `normalize.js` | content 格式规范化（对象数组 → 字符串） |
-| `tokenizer.js` | 基于 tiktoken 的 Token 计数 |
-| `stats.js` | 统计数据读写 |
+| `server.mjs` | HTTP 服务主入口（Express + Claude CLI 集成） |
+| `config.json` | 配置文件（端口等） |
+| `normalize.mjs` | content 格式规范化（对象数组 → 字符串） |
+| `tokenizer.mjs` | 基于 tiktoken 的 Token 计数 |
+| `stats.mjs` | 统计数据读写 |
 | `log/stats.json` | 累计统计数据 |
 
 ## 配置
@@ -31,26 +29,31 @@
 
 ```json
 {
-  "listen_port": 3457,
-  "upstream_host": "127.0.0.1",
-  "upstream_port": 3456,
+  "port": 3456,
   "max_requests_per_day": 200
 }
 ```
 
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
-| `listen_port` | 本服务监听端口 | `3457` |
-| `upstream_host` | claude-max-api-proxy 地址 | `127.0.0.1` |
-| `upstream_port` | claude-max-api-proxy 端口 | `3456` |
+| `port` | 服务监听端口 | `3456` |
 | `max_requests_per_day` | 每日保留的请求明细上限 | `200` |
+
+## API 端点
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/health` | GET | 健康检查 |
+| `/v1/models` | GET | 返回可用模型列表 |
+| `/v1/chat/completions` | POST | OpenAI 兼容的 chat completions |
 
 ## 功能
 
+- **OpenAI 兼容接口**：直接替代 claude-max-api-proxy，支持所有 OpenAI 客户端
 - **内容规范化**：自动将 `[{type:"text", text:"..."}]` 转换为纯字符串
 - **Token 统计**：使用 tiktoken 计算每次请求的 input/output tokens
 - **流式支持**：SSE 流式响应实时透传，同时收集 content 用于统计
-- **透明代理**：非 chat completions 请求直接透传至 claude-max-api-proxy
+- **会话管理**：通过 `user` 字段映射 Claude CLI session
 
 ## 使用
 
@@ -59,7 +62,7 @@
 npm install
 
 # 启动
-node server.js
+node server.mjs
 ```
 
 ## 统计数据

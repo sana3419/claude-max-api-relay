@@ -1,15 +1,20 @@
 /**
- * Statistics recording - hierarchical JSON stats (total → month → day).
+ * Statistics recording - hierarchical JSON stats (total -> month -> day).
  */
 
-const fs = require('fs');
-const path = require('path');
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { createRequire } from 'module';
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const require = createRequire(import.meta.url);
 const config = require('./config.json');
+
 const STATS_FILE = path.join(__dirname, 'log', 'stats.json');
 const MAX_REQUESTS_PER_DAY = config.max_requests_per_day || 200;
 
-function readStats() {
+export function readStats() {
   try {
     const data = fs.readFileSync(STATS_FILE, 'utf8');
     return JSON.parse(data);
@@ -32,7 +37,7 @@ function addTokens(summary, entry) {
   summary.output_tokens = (summary.output_tokens || 0) + (entry.output_tokens || 0);
 }
 
-function recordRequest(entry) {
+export function recordRequest(entry) {
   const stats = readStats();
   const date = new Date(entry.timestamp);
   const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
@@ -68,5 +73,3 @@ function recordRequest(entry) {
 
   writeStats(stats);
 }
-
-module.exports = { readStats, recordRequest };

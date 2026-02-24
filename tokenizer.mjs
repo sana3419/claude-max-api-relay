@@ -2,6 +2,9 @@
  * Token counting using tiktoken (cl100k_base as approximation for Claude).
  */
 
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+
 let encoder = null;
 
 function getEncoder() {
@@ -12,7 +15,7 @@ function getEncoder() {
   return encoder;
 }
 
-function countTokens(text) {
+export function countTokens(text) {
   if (!text) return 0;
   try {
     const enc = getEncoder();
@@ -24,7 +27,7 @@ function countTokens(text) {
   }
 }
 
-function countMessagesTokens(messages) {
+export function countMessagesTokens(messages) {
   if (!Array.isArray(messages)) return 0;
   let total = 0;
   for (const msg of messages) {
@@ -35,5 +38,3 @@ function countMessagesTokens(messages) {
   }
   return total;
 }
-
-module.exports = { countTokens, countMessagesTokens };
