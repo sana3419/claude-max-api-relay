@@ -5,6 +5,11 @@
  * content normalization and token statistics into a single process.
  *
  * Listens on port 3456, directly invokes Claude CLI.
+ *
+ * Supported endpoints:
+ *   GET  /health
+ *   GET  /v1/models
+ *   POST /v1/chat/completions  — Claude CLI (text + image)
  */
 
 // Clear Claude Code nesting detection so CLI subprocess can run
@@ -21,7 +26,7 @@ import { openaiToCli } from 'claude-max-api-proxy/dist/adapter/openai-to-cli.js'
 import { cliResultToOpenai, createDoneChunk } from 'claude-max-api-proxy/dist/adapter/cli-to-openai.js';
 
 // Import local modules
-import { normalizeMessages } from './normalize.mjs';
+import { extractImages, cleanupFiles, normalizeMessages } from './normalize.mjs';
 import { countTokens, countMessagesTokens } from './tokenizer.mjs';
 import { recordRequest } from './stats.mjs';
 
@@ -29,10 +34,22 @@ const require = createRequire(import.meta.url);
 const config = require('./config.json');
 const PORT = config.port || 3456;
 
+// ── Extended subprocess with image file support ──────────────────────────
+class ImageAwareSubprocess extends ClaudeSubprocess {
+  buildArgs(prompt, options) {
+    const args = super.buildArgs(prompt, options);
+    // Append image file paths as positional args (Claude CLI supports this)
+    if (options.files?.length) {
+      args.push(...options.files);
+    }
+    return args;
+  }
+}
+
 const app = express();
 
-// Middleware
-app.use(express.json({ limit: '10mb' }));
+// Middleware — increase limit for base64 images
+app.use(express.json({ limit: '50mb' }));
 
 // CORS
 app.use((_req, res, next) => {
@@ -55,12 +72,15 @@ app.get('/health', (_req, res) => {
 
 // ── Models ──────────────────────────────────────────────────────────────
 app.get('/v1/models', (_req, res) => {
+  const ts = Math.floor(Date.now() / 1000);
   res.json({
     object: 'list',
     data: [
-      { id: 'claude-opus-4', object: 'model', owned_by: 'anthropic', created: Math.floor(Date.now() / 1000) },
-      { id: 'claude-sonnet-4', object: 'model', owned_by: 'anthropic', created: Math.floor(Date.now() / 1000) },
-      { id: 'claude-haiku-4', object: 'model', owned_by: 'anthropic', created: Math.floor(Date.now() / 1000) },
+      { id: 'claude-opus-4',   object: 'model', owned_by: 'anthropic', created: ts },
+      { id: 'claude-opus-4-6', object: 'model', owned_by: 'anthropic', created: ts },
+      { id: 'claude-sonnet-4', object: 'model', owned_by: 'anthropic', created: ts },
+      { id: 'claude-sonnet-4-6', object: 'model', owned_by: 'anthropic', created: ts },
+      { id: 'claude-haiku-4',  object: 'model', owned_by: 'anthropic', created: ts },
     ],
   });
 });
@@ -94,6 +114,12 @@ app.post('/v1/chat/completions', async (req, res) => {
       ).slice(0, 100)
     : '';
 
+  // Extract images to temp files before normalization
+  const imageFiles = await extractImages(body.messages);
+  if (imageFiles.length > 0) {
+    console.log(`[${reqId}] extracted ${imageFiles.length} image(s) to temp files`);
+  }
+
   // Normalize messages content (object array → string)
   body.messages = normalizeMessages(body.messages);
 
@@ -103,14 +129,15 @@ app.post('/v1/chat/completions', async (req, res) => {
   try {
     // Convert OpenAI format → CLI input
     const cliInput = openaiToCli(body);
-    const subprocess = new ClaudeSubprocess();
+    const subprocess = new ImageAwareSubprocess();
 
     if (isStream) {
-      await handleStream(req, res, subprocess, cliInput, { reqId, startTime, model, inputTokens, firstMessage });
+      await handleStream(req, res, subprocess, cliInput, imageFiles, { reqId, startTime, model, inputTokens, firstMessage });
     } else {
-      await handleNonStream(res, subprocess, cliInput, { reqId, startTime, model, inputTokens, firstMessage });
+      await handleNonStream(res, subprocess, cliInput, imageFiles, { reqId, startTime, model, inputTokens, firstMessage });
     }
   } catch (error) {
+    cleanupFiles(imageFiles);
     const message = error instanceof Error ? error.message : 'Unknown error';
     console.error(`[${reqId}] Error:`, message);
     if (!res.headersSent) {
@@ -120,7 +147,7 @@ app.post('/v1/chat/completions', async (req, res) => {
 });
 
 // ── Streaming handler ───────────────────────────────────────────────────
-function handleStream(req, res, subprocess, cliInput, meta) {
+function handleStream(req, res, subprocess, cliInput, imageFiles, meta) {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
@@ -134,10 +161,15 @@ function handleStream(req, res, subprocess, cliInput, meta) {
     let isComplete = false;
     let collectedContent = '';
 
+    const finish = () => {
+      cleanupFiles(imageFiles);
+      resolve();
+    };
+
     // Kill subprocess on client disconnect
     res.on('close', () => {
       if (!isComplete) subprocess.kill();
-      resolve();
+      finish();
     });
 
     // Stream content deltas
@@ -188,7 +220,7 @@ function handleStream(req, res, subprocess, cliInput, meta) {
         response_time_ms: elapsed,
         first_message: meta.firstMessage,
       });
-      resolve();
+      finish();
     });
 
     subprocess.on('error', (error) => {
@@ -197,7 +229,7 @@ function handleStream(req, res, subprocess, cliInput, meta) {
         res.write(`data: ${JSON.stringify({ error: { message: error.message, type: 'server_error', code: null } })}\n\n`);
         res.end();
       }
-      resolve();
+      finish();
     });
 
     subprocess.on('close', (code) => {
@@ -208,26 +240,32 @@ function handleStream(req, res, subprocess, cliInput, meta) {
         res.write('data: [DONE]\n\n');
         res.end();
       }
-      resolve();
+      finish();
     });
 
     subprocess.start(cliInput.prompt, {
       model: cliInput.model,
       sessionId: cliInput.sessionId,
+      files: imageFiles,
     }).catch((err) => {
       console.error(`[${meta.reqId}] Subprocess start error:`, err);
       if (!res.headersSent) {
         res.status(500).json({ error: { message: err.message, type: 'server_error', code: null } });
       }
-      resolve();
+      finish();
     });
   });
 }
 
 // ── Non-streaming handler ───────────────────────────────────────────────
-function handleNonStream(res, subprocess, cliInput, meta) {
+function handleNonStream(res, subprocess, cliInput, imageFiles, meta) {
   return new Promise((resolve) => {
     let finalResult = null;
+
+    const finish = () => {
+      cleanupFiles(imageFiles);
+      resolve();
+    };
 
     subprocess.on('result', (result) => {
       finalResult = result;
@@ -238,7 +276,7 @@ function handleNonStream(res, subprocess, cliInput, meta) {
       if (!res.headersSent) {
         res.status(500).json({ error: { message: error.message, type: 'server_error', code: null } });
       }
-      resolve();
+      finish();
     });
 
     subprocess.on('close', (code) => {
@@ -266,17 +304,18 @@ function handleNonStream(res, subprocess, cliInput, meta) {
           error: { message: `Claude CLI exited with code ${code} without response`, type: 'server_error', code: null },
         });
       }
-      resolve();
+      finish();
     });
 
     subprocess.start(cliInput.prompt, {
       model: cliInput.model,
       sessionId: cliInput.sessionId,
+      files: imageFiles,
     }).catch((error) => {
       if (!res.headersSent) {
         res.status(500).json({ error: { message: error.message, type: 'server_error', code: null } });
       }
-      resolve();
+      finish();
     });
   });
 }
@@ -293,7 +332,7 @@ async function main() {
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`claude-max-api-relay listening on :${PORT}`);
-    console.log('Direct Claude CLI integration — no upstream proxy needed');
+    console.log('Endpoints: /health  /v1/models  /v1/chat/completions  /v1/embeddings');
   });
 }
 
