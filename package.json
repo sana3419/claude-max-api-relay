@@ -1,0 +1,13 @@
+{
+  "name": "claude-max-api-relay",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Unified Claude Max API service — Claude CLI adapter + content normalization + token stats",
+  "main": "server.mjs",
+  "dependencies": {
+    "claude-max-api-proxy": "latest",
+    "express": "^4.21.2",
+    "tiktoken": "^1.0.18"
+  }
+}

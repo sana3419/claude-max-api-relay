@@ -1,0 +1,16 @@
+{
+  "port": 3456,
+  "max_requests_per_day": 200,
+  "cache": {
+    "ttl": "5m",
+    "min_tokens": 1024
+  },
+  "rate_limit": {
+    "max_requests_per_minute": 60,
+    "max_tokens_per_day": 1000000
+  },
+  "auth": {
+    "enabled": false,
+    "api_keys": []
+  }
+}
